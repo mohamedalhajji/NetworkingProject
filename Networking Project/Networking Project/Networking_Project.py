@@ -65,6 +65,11 @@ def listen_for_announcements():
                 # Receive incoming messages
                 data, addr = sock.recvfrom(1024)
                 payload = json.loads(data.decode('utf-8'))
+
+                
+                username = payload.get('username')
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
                 print(f"Received announcement from {payload['username']}")
                 # Store the peer's ID (username) and timestamp
                 # Add your logic to store the peer information in a local dictionary

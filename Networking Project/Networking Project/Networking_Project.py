@@ -2,7 +2,10 @@ import socket
 import json
 import time
 import ipaddress
+from datetime import datetime
 
+
+peer_dictionary = {}
 def get_local_ip():
     """ Get the local IP address of the computer. """
     try:
@@ -69,6 +72,9 @@ def listen_for_announcements():
                 
                 username = payload.get('username')
                 timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+                peer_dictionary[username] = timestamp
+
 
                 print(f"Received announcement from {payload['username']}")
                 # Store the peer's ID (username) and timestamp

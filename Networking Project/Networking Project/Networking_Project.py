@@ -51,7 +51,33 @@ def broadcast_presence(username, subnet_mask):
                 print(f"Error broadcasting presence: {e}")
                 break
 
+def listen_for_announcements():
+    """ Listen for peer announcements in the local area network. """
+    # Create a UDP socket
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        # Allow the socket to be reused
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # Bind to the broadcast address and port
+        sock.bind(('', 6000))
+
+        while True:
+            try:
+                # Receive incoming messages
+                data, addr = sock.recvfrom(1024)
+                payload = json.loads(data.decode('utf-8'))
+                print(f"Received announcement from {payload['username']}")
+                # Store the peer's ID (username) and timestamp
+                # Add your logic to store the peer information in a local dictionary
+            except KeyboardInterrupt:
+                print("Listening stopped")
+                break
+            except Exception as e:
+                print(f"Error listening for announcements: {e}")
+                break
+
 if __name__ == "__main__":
     subnet_mask = '24'  # CIDR notation
     username = input("Enter your username: ")
     broadcast_presence(username, subnet_mask)
+    listen_for_announcements()
+    

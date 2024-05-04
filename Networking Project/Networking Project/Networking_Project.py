@@ -9,8 +9,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-#from cryptography.hazmat.primitives import padding
-#from cryptography.hazmat.primitives.padding import pad, unpad
+from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from cryptography.hazmat.primitives.padding import PKCS7
 from os import urandom
 
@@ -98,6 +97,7 @@ def tcp_server(parameters, private_key):
     host = get_local_ip()
     port = 6001
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind((host, port))
         s.listen()
         print(f"Listening for chat on {host}:{port}")
@@ -124,7 +124,11 @@ def tcp_client(server_ip, message, secure, public_key_bytes, parameters, private
         server_public_key_bytes = s.recv(1024)
         derived_key = compute_shared_secret(private_key, server_public_key_bytes, parameters)
         if secure:
+            try:
                 message = encrypt_message(derived_key, message)
+            except Exception as e:
+                print(f"Error during message encryption: {e}")
+                return
         s.sendall(message.encode())
         print("Message sent")
 
@@ -154,7 +158,7 @@ def decrypt_message(key, iv_ciphertext):
 
 
 def compute_shared_secret(private_key, peer_public_key_bytes, parameters):
-    peer_public_key = dh.DHPublicKey.from_public_bytes(peer_public_key_bytes, parameters)
+    peer_public_key = load_pem_public_key(peer_public_key_bytes, backend=default_backend())
     shared_key = private_key.exchange(peer_public_key)
     derived_key = HKDF(
         algorithm=hashes.SHA256(),

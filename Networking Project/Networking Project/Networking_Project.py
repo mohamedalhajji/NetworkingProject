@@ -6,17 +6,17 @@ from datetime import datetime
 from threading import Thread, Lock
 from cryptography.hazmat.primitives.asymmetric import dh
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.padding import PKCS7
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import hashes
 from os import urandom
 import base64
 
 # Configuration
 BROADCAST_PORT = 6000
-TCP_PORT = 6001
+TCP_PORT = 8000
 
 # Global variables
 peer_dictionary = {}
@@ -24,13 +24,10 @@ peer_lock = Lock()
 log_file_path = "chat_history.log"
 current_user = None
 
-# Helper functions for DH Key Exchange
-def generate_dh_parameters():
-    return dh.generate_parameters(generator=2, key_size=2048, backend=default_backend())
-
 # Global DH parameters
-dh_parameters = generate_dh_parameters()
+dh_parameters = dh.generate_parameters(generator=2, key_size=2048, backend=default_backend())
 
+# Helper functions for DH Key Exchange
 def generate_dh_keypair(parameters):
     private_key = parameters.generate_private_key()
     public_key = private_key.public_key()
@@ -41,7 +38,7 @@ def compute_shared_secret(private_key, peer_public_key):
         shared_secret = private_key.exchange(peer_public_key)
         return shared_secret
     except Exception as e:
-        print(f"Error computing shared", e)
+        print(f"Error computing shared secret: {e}")
         return None
 
 def serialize_key(public_key):
@@ -100,14 +97,19 @@ def get_broadcast_address(ip, subnet_mask):
 def send_message(sock, message):
     try:
         message_length = len(message)
-        sock.sendall(str(message_length).encode().ljust(10))  # Send length as fixed-size header
+        sock.sendall(str(message_length).encode().ljust(10))
         sock.sendall(message.encode())
     except Exception as e:
         print(f"Error in send_message: {e}")
 
 def receive_message(sock):
     try:
-        message_length = int(sock.recv(10).decode().strip())  # Receive the fixed-size header
+        length_str = sock.recv(10).decode().strip()
+        if not length_str:
+            print("Received empty length header")
+            return None
+        message_length = int(length_str)
+        print(f"Expected message length: {message_length}")
         message = sock.recv(message_length).decode()
         return message
     except Exception as e:
@@ -137,6 +139,17 @@ def listen_for_announcements():
             with peer_lock:
                 peer_dictionary[username] = (ip, timestamp)
 
+def start_server():
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_socket.bind(('0.0.0.0', TCP_PORT))
+    server_socket.listen(5)
+
+    while True:
+        client_socket, addr = server_socket.accept()
+        client_handler = Thread(target=handle_client, args=(client_socket, addr))
+        client_handler.start()
+
 # Chat Initiator
 def communicate_with_peer(peer_ip, message):
     secure_flag = input("Secure chat (yes/no)? ").strip().lower() == 'yes'
@@ -144,73 +157,61 @@ def communicate_with_peer(peer_ip, message):
         client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         client_socket.settimeout(10)
         client_socket.connect((peer_ip, TCP_PORT))
-        print(f"Connected to peer at {peer_ip}")
 
         # Send the secure flag to the server
         client_socket.sendall(b'1' if secure_flag else b'0')
-        print(f"Sent secure flag to server: {secure_flag}")
 
         if secure_flag:
             # Use global DH parameters
             private_key, public_key = generate_dh_keypair(dh_parameters)
-            print("Generated DH key pair")
 
             # Serialize and send public key to server
             serialized_public_key = serialize_key(public_key)
             if serialized_public_key is None:
                 print("Failed to serialize public key")
                 return
-            print(f"Serialized public key: {serialized_public_key}")
 
             # Send the public key using the helper function
             send_message(client_socket, serialized_public_key)
-            print("Sent public key to server, waiting for server's public key...")
 
             # Receive server's public key using the helper function
             server_public_key_data = receive_message(client_socket)
             if not server_public_key_data:
                 print("Failed to receive server's public key")
                 return
-            print(f"Received server's public key data: {server_public_key_data}")
             server_public_key = deserialize_key(server_public_key_data)
             if server_public_key is None:
                 print("Failed to deserialize server's public key")
                 return
-            print("Received and deserialized server's public key")
 
             # Compute shared secret
             shared_secret = compute_shared_secret(private_key, server_public_key)
             if shared_secret is None:
                 print("Failed to compute shared secret. Terminating connection.")
                 return
-            print(f"Shared secret: {shared_secret}")
             derived_key = HKDF(
                 algorithm=hashes.SHA256(), length=32, salt=None, 
                 info=b'handshake data', backend=default_backend()
             ).derive(shared_secret)
-            print("Computed shared secret and derived key")
 
             # Send encrypted message
             encrypted_message = encrypt_message(derived_key, message)
-            client_socket.sendall(encrypted_message.encode())
+            send_message(client_socket, encrypted_message)
             print(f"Sent encrypted message: {encrypted_message}")
             log_message("Sent", "You", peer_ip, message, True)
         else:
             # Send unencrypted message
-            client_socket.sendall(message.encode())
+            send_message(client_socket, message)
             print(f"Sent unencrypted message: {message}")
             log_message("Sent", "You", peer_ip, message, False)
     except Exception as e:
         print(f"Error in communicate_with_peer: {e}")
     finally:
         client_socket.close()
-        print(f"Closed connection with peer at {peer_ip}")
 
 # Chat Responder
 def handle_client(client_socket, addr):
     try:
-        print(f"Handling client from {addr}")
-
         # Receive the secure flag from the client
         secure_flag = client_socket.recv(1).decode()
         secure = secure_flag == '1'
@@ -219,7 +220,6 @@ def handle_client(client_socket, addr):
         if secure:
             # Use global DH parameters
             private_key, public_key = generate_dh_keypair(dh_parameters)
-            print("Generated DH key pair")
 
             # Serialize and send public key to client
             serialized_public_key = serialize_key(public_key)
@@ -229,49 +229,43 @@ def handle_client(client_socket, addr):
 
             # Send the public key using the helper function
             send_message(client_socket, serialized_public_key)
-            print("Sent public key to client, waiting for client's public key...")
 
             # Receive client's public key using the helper function
             client_public_key_data = receive_message(client_socket)
             if not client_public_key_data:
                 print("Failed to receive client's public key")
                 return
-            print(f"Received client's public key data: {client_public_key_data}")
             client_public_key = deserialize_key(client_public_key_data)
             if client_public_key is None:
                 print("Failed to deserialize client's public key")
                 return
-            print("Deserialized client's public key")
 
             # Compute shared secret
             shared_secret = compute_shared_secret(private_key, client_public_key)
             if shared_secret is None:
                 print("Failed to compute shared secret. Terminating connection.")
                 return
-            print(f"Shared secret: {shared_secret}")
             derived_key = HKDF(
                 algorithm=hashes.SHA256(), length=32, salt=None, 
                 info=b'handshake data', backend=default_backend()
             ).derive(shared_secret)
-            print("Computed shared secret and derived key")
 
         # Communicate securely or unsecurely based on the flag
         while True:
-            iv_ciphertext = client_socket.recv(4096)
+            iv_ciphertext = receive_message(client_socket)
             if not iv_ciphertext:
                 print("No data received. Breaking the loop.")
                 break
             if secure:
                 message = decrypt_message(derived_key, iv_ciphertext)
             else:
-                message = iv_ciphertext.decode().strip()
+                message = iv_ciphertext.strip()
             print(f"Received message from {addr}: {message}")
             log_message("Received", "Peer", addr[0], message, secure)
     except Exception as e:
         print(f"Error in handle_client: {e}")
     finally:
         client_socket.close()
-        print(f"Closed connection with client from {addr}")
 
 # Main Application
 def list_users():
@@ -311,18 +305,6 @@ def handle_chat():
                 communicate_with_peer(peer_ip, message)
             else:
                 print("Peer not found. Try again.")
-
-def start_server():
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server_socket.bind(('0.0.0.0', TCP_PORT))
-    server_socket.listen(5)
-    print("Server listening on port 6001...")
-
-    while True:
-        client_socket, addr = server_socket.accept()
-        client_handler = Thread(target=handle_client, args=(client_socket, addr))
-        client_handler.start()
 
 def main():
     global current_user

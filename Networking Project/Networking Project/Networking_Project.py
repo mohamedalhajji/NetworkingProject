@@ -188,7 +188,7 @@ def chat_initiator(peer_ip):
 
         if secure_flag:
             # Generate a DH keypair and serialize the public key
-            private_key, public_key = generate_dh_keypair(dh_parameters)
+            private_key, public_key = generate_dh_keypair()
             
             # Serialize and send public key to server
             serialized_public_key = serialize_key(public_key)
@@ -208,7 +208,7 @@ def chat_initiator(peer_ip):
             if server_public_key is None:
                 print("Failed to deserialize server's public key")
                 return
-
+            
             # Receive a number from the user
             number = input("Enter a number to generate shared key: ")
             send_message(client_socket, json.dumps({"key": number}))
@@ -264,7 +264,7 @@ def chat_receiver(client_socket, addr):
 
         if secure:
             # Use global DH parameters
-            private_key, public_key = generate_dh_keypair(dh_parameters)
+            private_key, public_key = generate_dh_keypair()
 
             # Serialize and send public key to client
             serialized_public_key = serialize_key(public_key)

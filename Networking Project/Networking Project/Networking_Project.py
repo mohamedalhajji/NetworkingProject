@@ -24,12 +24,13 @@ peer_lock = Lock()
 log_file_path = "chat_history.log"
 current_user = None
 
-# Global DH parameters
+# Generate DH parameters once and share them between devices
 dh_parameters = dh.generate_parameters(generator=2, key_size=2048, backend=default_backend())
+serialized_dh_parameters = dh_parameters.parameter_bytes(encoding=serialization.Encoding.PEM, format=serialization.ParameterFormat.PKCS3)
 
 # Helper functions for DH Key Exchange
-def generate_dh_keypair(parameters):
-    private_key = parameters.generate_private_key()
+def generate_dh_keypair():
+    private_key = dh_parameters.generate_private_key()
     public_key = private_key.public_key()
     return private_key, public_key
 
@@ -187,7 +188,7 @@ def chat_initiator(peer_ip):
 
         if secure_flag:
             # Generate a DH keypair and serialize the public key
-            private_key, public_key = generate_dh_keypair(dh_parameters)
+            private_key, public_key = generate_dh_keypair()
             
             # Serialize and send public key to server
             serialized_public_key = serialize_key(public_key)
@@ -251,7 +252,7 @@ def chat_receiver(client_socket, addr):
 
         if secure:
             # Use global DH parameters
-            private_key, public_key = generate_dh_keypair(dh_parameters)
+            private_key, public_key = generate_dh_keypair()
 
             # Serialize and send public key to client
             serialized_public_key = serialize_key(public_key)

@@ -47,14 +47,14 @@ def serialize_key(public_key):
             encoding=serialization.Encoding.PEM,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         )
-        return base64.b64encode(serialized_key).decode('utf-8')
+        return serialized_key.decode('utf-8')
     except Exception as e:
         print(f"Error serializing public key: {e}")
         return None
 
 def deserialize_key(key_data):
     try:
-        key_bytes = base64.b64decode(key_data.encode('utf-8'))
+        key_bytes = key_data.encode('utf-8')
         public_key = serialization.load_pem_public_key(key_bytes, backend=default_backend())
         return public_key
     except Exception as e:

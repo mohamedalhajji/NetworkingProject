@@ -81,8 +81,9 @@ def decrypt_message(key, iv_ciphertext):
     return plaintext.decode()
 
 def log_message(action, username, ip, message, secure):
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')  # Format without milliseconds
     with open(log_file_path, 'a') as file:
-        file.write(f"{datetime.now()} - {action} - {username} ({ip}) - {'Encrypted' if secure else 'Unencrypted'}: {message}\n")
+        file.write(f"{timestamp} - {action} - {username} ({ip}) - {'Encrypted' if secure else 'Unencrypted'}: {message}\n")
 
 def get_local_ip():
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
@@ -106,18 +107,16 @@ def receive_message(sock):
     try:
         length_str = sock.recv(10).decode().strip()
         if not length_str:
-            print("Received empty length header")
             return None
         message_length = int(length_str)
-        print(f"Expected message length: {message_length}")
         message = sock.recv(message_length).decode()
         return message
     except Exception as e:
         print(f"Error in receive_message: {e}")
         return None
 
-# Service Announcer
-def broadcast_presence(username, broadcast_address):
+# Broadcast Presence
+def service_announcer(username, broadcast_address):
     local_ip = get_local_ip()
     message = json.dumps({"username": username, "ip": local_ip})
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
@@ -126,8 +125,10 @@ def broadcast_presence(username, broadcast_address):
             sock.sendto(message.encode('utf-8'), (broadcast_address, BROADCAST_PORT))
             time.sleep(8)
 
-# Peer Discovery
-def listen_for_announcements():
+# Listen for Announcements
+def peer_discovery():
+    last_status = {}
+
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(('', BROADCAST_PORT))
@@ -136,8 +137,31 @@ def listen_for_announcements():
             payload = json.loads(data.decode('utf-8'))
             username, ip = payload['username'], addr[0]
             timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
             with peer_lock:
-                peer_dictionary[username] = (ip, timestamp)
+                if username == current_user:
+                    continue  # Skip updates for the current user
+
+                if username in peer_dictionary:
+                    peer_dictionary[username] = (ip, timestamp)
+                else:
+                    peer_dictionary[username] = (ip, timestamp)
+
+                last_seen = datetime.strptime(peer_dictionary[username][1], '%Y-%m-%d %H:%M:%S')
+                time_diff = (datetime.now() - last_seen).total_seconds()
+
+                # Determine status
+                if time_diff <= 10:
+                    status = "Online"
+                elif time_diff <= 900:
+                    status = "Away"
+                else:
+                    status = "Offline"
+
+                # Print status only if it has changed
+                if username not in last_status or last_status[username] != status:
+                    last_status[username] = status
+                    print(f"{username} is {status.lower()}")
 
 def start_server():
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -147,11 +171,11 @@ def start_server():
 
     while True:
         client_socket, addr = server_socket.accept()
-        client_handler = Thread(target=handle_client, args=(client_socket, addr))
+        client_handler = Thread(target=chat_receiver, args=(client_socket, addr))
         client_handler.start()
 
-# Chat Initiator
-def communicate_with_peer(peer_ip, message):
+# Communicate With Peer
+def chat_initiator(peer_ip):
     secure_flag = input("Secure chat (yes/no)? ").strip().lower() == 'yes'
     try:
         client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -162,19 +186,19 @@ def communicate_with_peer(peer_ip, message):
         client_socket.sendall(b'1' if secure_flag else b'0')
 
         if secure_flag:
-            # Use global DH parameters
+            # Generate a DH keypair and serialize the public key
             private_key, public_key = generate_dh_keypair(dh_parameters)
-
+            
             # Serialize and send public key to server
             serialized_public_key = serialize_key(public_key)
             if serialized_public_key is None:
                 print("Failed to serialize public key")
                 return
-
+            
             # Send the public key using the helper function
             send_message(client_socket, serialized_public_key)
 
-            # Receive server's public key using the helper function
+            # Receive and deserialize the peer's public key
             server_public_key_data = receive_message(client_socket)
             if not server_public_key_data:
                 print("Failed to receive server's public key")
@@ -183,8 +207,8 @@ def communicate_with_peer(peer_ip, message):
             if server_public_key is None:
                 print("Failed to deserialize server's public key")
                 return
-
-            # Compute shared secret
+            
+            # Compute the shared secret and derive the encryption key
             shared_secret = compute_shared_secret(private_key, server_public_key)
             if shared_secret is None:
                 print("Failed to compute shared secret. Terminating connection.")
@@ -194,23 +218,31 @@ def communicate_with_peer(peer_ip, message):
                 info=b'handshake data', backend=default_backend()
             ).derive(shared_secret)
 
-            # Send encrypted message
-            encrypted_message = encrypt_message(derived_key, message)
-            send_message(client_socket, encrypted_message)
-            print(f"Sent encrypted message: {encrypted_message}")
-            log_message("Sent", "You", peer_ip, message, True)
+            # Allow user to type and send encrypted messages
+            while True:
+                message = input("Enter your message (type 'exit' to end chat): ")
+                if message.lower() == 'exit':
+                    break
+                encrypted_message = encrypt_message(derived_key, message)
+                send_message(client_socket, encrypted_message)
+                log_message("Sent", current_user, peer_ip, message, True)
+                print(f"{current_user}: {message}")
         else:
-            # Send unencrypted message
-            send_message(client_socket, message)
-            print(f"Sent unencrypted message: {message}")
-            log_message("Sent", "You", peer_ip, message, False)
+            # Allow user to type and send unencrypted messages
+            while True:
+                message = input("Enter your message (type 'exit' to end chat): ")
+                if message.lower() == 'exit':
+                    break
+                send_message(client_socket, message) 
+                log_message("Sent", current_user, peer_ip, message, False)
+                print(f"{current_user}: {message}")
     except Exception as e:
-        print(f"Error in communicate_with_peer: {e}")
+        print(f"Error in chat_initiator: {e}")
     finally:
         client_socket.close()
 
-# Chat Responder
-def handle_client(client_socket, addr):
+# Handle Client
+def chat_receiver(client_socket, addr):
     try:
         # Receive the secure flag from the client
         secure_flag = client_socket.recv(1).decode()
@@ -254,16 +286,17 @@ def handle_client(client_socket, addr):
         while True:
             iv_ciphertext = receive_message(client_socket)
             if not iv_ciphertext:
-                print("No data received. Breaking the loop.")
                 break
             if secure:
                 message = decrypt_message(derived_key, iv_ciphertext)
             else:
                 message = iv_ciphertext.strip()
-            print(f"Received message from {addr}: {message}")
-            log_message("Received", "Peer", addr[0], message, secure)
+            with peer_lock:
+                username = next((name for name, info in peer_dictionary.items() if info[0] == addr[0]), addr[0])
+            print(f"{username}: {message}")
+            log_message("Received", username, addr[0], message, secure)
     except Exception as e:
-        print(f"Error in handle_client: {e}")
+        print(f"Error in chat_receiver: {e}")
     finally:
         client_socket.close()
 
@@ -282,7 +315,7 @@ def list_users():
             else:
                 status = "Offline"
             if username == current_user:
-                print(f"{username} ({status}, You) at {ip}")
+                print(f"(You), {username} ({status}) at {ip}")
             else:
                 print(f"{username} ({status}) at {ip}")
 
@@ -296,15 +329,13 @@ def display_chat_history():
         print("No chat history found.")
 
 def handle_chat():
-    while True:
-        peer_username = input("Enter the username of the peer to chat with: ")
-        with peer_lock:
-            if peer_username in peer_dictionary:
-                peer_ip = peer_dictionary[peer_username][0]
-                message = input("Enter your message: ")
-                communicate_with_peer(peer_ip, message)
-            else:
-                print("Peer not found. Try again.")
+    peer_username = input("Enter the username of the peer to chat with: ")
+    with peer_lock:
+        if peer_username in peer_dictionary:
+            peer_ip = peer_dictionary[peer_username][0]
+            chat_initiator(peer_ip)
+        else:
+            print("Peer not found. Try again.")
 
 def main():
     global current_user
@@ -314,12 +345,12 @@ def main():
     current_user = input("Enter your username: ")
 
     # Start broadcasting presence
-    broadcast_thread = Thread(target=broadcast_presence, args=(current_user, broadcast_address))
+    broadcast_thread = Thread(target=service_announcer, args=(current_user, broadcast_address))
     broadcast_thread.daemon = True
     broadcast_thread.start()
 
     # Start listening for announcements
-    listen_thread = Thread(target=listen_for_announcements)
+    listen_thread = Thread(target=peer_discovery)
     listen_thread.daemon = True
     listen_thread.start()
 
@@ -331,10 +362,10 @@ def main():
     # Main loop
     while True:
         print("\nAvailable commands:")
-        print("  users - List all known users and their status")
-        print("  chat - Start a chat session")
-        print("  history - Display chat history")
-        print("  exit - Exit the program")
+        print("  Users - List all known users and their status")
+        print("  Chat - Start a chat session")
+        print("  History - Display chat history")
+        print("  Exit - Exit the program")
         command = input("\nEnter command: ").strip().lower()
         if command == 'users':
             list_users()

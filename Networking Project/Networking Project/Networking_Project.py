@@ -237,7 +237,7 @@ def chat_initiator(peer_ip):
                 if message.lower() == 'exit':
                     break
                 encrypted_message = encrypt_message(derived_key, message)
-                send_message(client_socket, encrypted_message)
+                send_message(client_socket, json.dumps({"encrypted_message": encrypted_message}))
                 log_message("Sent", current_user, peer_ip, message, True)
                 print(f"{current_user}: {message}")
         else:
@@ -246,7 +246,7 @@ def chat_initiator(peer_ip):
                 message = input("Enter your message (type 'exit' to end chat): ")
                 if message.lower() == 'exit':
                     break
-                send_message(client_socket, message) 
+                send_message(client_socket, json.dumps({"unencrypted_message": message})) 
                 log_message("Sent", current_user, peer_ip, message, False)
                 print(f"{current_user}: {message}")
     except Exception as e:
@@ -313,9 +313,9 @@ def chat_receiver(client_socket, addr):
             if not iv_ciphertext:
                 break
             if secure:
-                message = decrypt_message(derived_key, iv_ciphertext)
+                message = decrypt_message(derived_key, json.loads(iv_ciphertext)['encrypted_message'])
             else:
-                message = iv_ciphertext.strip()
+                message = json.loads(iv_ciphertext)['unencrypted_message']
             with peer_lock:
                 username = next((name for name, info in peer_dictionary.items() if info[0] == addr[0]), addr[0])
             print(f"{username}: {message}")

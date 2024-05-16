@@ -188,7 +188,7 @@ def chat_initiator(peer_ip):
 
         if secure_flag:
             # Generate a DH keypair and serialize the public key
-            private_key, public_key = generate_dh_keypair()
+            private_key, public_key = generate_dh_keypair(dh_parameters)
             
             # Serialize and send public key to server
             serialized_public_key = serialize_key(public_key)
@@ -208,16 +208,28 @@ def chat_initiator(peer_ip):
             if server_public_key is None:
                 print("Failed to deserialize server's public key")
                 return
-            
+
+            # Receive a number from the user
+            number = input("Enter a number to generate shared key: ")
+            send_message(client_socket, json.dumps({"key": number}))
+
+            # Receive the server's number
+            server_number_data = receive_message(client_socket)
+            if not server_number_data:
+                print("Failed to receive server's number")
+                return
+            server_number = json.loads(server_number_data)['key']
+
             # Compute the shared secret and derive the encryption key
             shared_secret = compute_shared_secret(private_key, server_public_key)
             if shared_secret is None:
                 print("Failed to compute shared secret. Terminating connection.")
                 return
+            combined_key_data = shared_secret + number.encode() + server_number.encode()
             derived_key = HKDF(
                 algorithm=hashes.SHA256(), length=32, salt=None, 
                 info=b'handshake data', backend=default_backend()
-            ).derive(shared_secret)
+            ).derive(combined_key_data)
 
             # Allow user to type and send encrypted messages
             while True:
@@ -252,7 +264,7 @@ def chat_receiver(client_socket, addr):
 
         if secure:
             # Use global DH parameters
-            private_key, public_key = generate_dh_keypair()
+            private_key, public_key = generate_dh_keypair(dh_parameters)
 
             # Serialize and send public key to client
             serialized_public_key = serialize_key(public_key)
@@ -273,15 +285,27 @@ def chat_receiver(client_socket, addr):
                 print("Failed to deserialize client's public key")
                 return
 
+            # Receive the client's number
+            client_number_data = receive_message(client_socket)
+            if not client_number_data:
+                print("Failed to receive client's number")
+                return
+            client_number = json.loads(client_number_data)['key']
+
+            # Send a number back to the client
+            number = input("Enter a number to generate shared key: ")
+            send_message(client_socket, json.dumps({"key": number}))
+
             # Compute shared secret
             shared_secret = compute_shared_secret(private_key, client_public_key)
             if shared_secret is None:
                 print("Failed to compute shared secret. Terminating connection.")
                 return
+            combined_key_data = shared_secret + client_number.encode() + number.encode()
             derived_key = HKDF(
                 algorithm=hashes.SHA256(), length=32, salt=None, 
                 info=b'handshake data', backend=default_backend()
-            ).derive(shared_secret)
+            ).derive(combined_key_data)
 
         # Communicate securely or unsecurely based on the flag
         while True:

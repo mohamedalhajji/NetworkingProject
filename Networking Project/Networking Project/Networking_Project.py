@@ -219,7 +219,7 @@ def display_commands():
     print("  Chat - Start a chat session")
     print("  History - Display chat history")
     print("  Exit - Exit the program")
-    print("\nEnter command:", end="")
+    print("\nEnter command: ", end="")
 
 def chat_receiver(client_socket, addr):
     try:
@@ -266,9 +266,13 @@ def chat_receiver(client_socket, addr):
                 message = decrypt_message(derived_key, iv_ciphertext)
             else:
                 message = json.loads(iv_ciphertext).get('unencrypted_message')
-            username = [k for k, v in peer_dictionary.items() if v[0] == addr[0]][0]
-            print(f"Received message from {username}: {message}")
-            log_message("Received", "Peer", addr[0], message, secure)
+            username = [k for k, v in peer_dictionary.items() if v[0] == addr[0]]
+            if username:
+                username = username[0]
+                print(f"Received message from {username}: {message}")
+                log_message("Received", "Peer", addr[0], message, secure)
+            else:
+                print(f"Received message from unknown peer {addr[0]}: {message}")
     except Exception as e:
         print(f"Error in chat_receiver: {e}")
     finally:

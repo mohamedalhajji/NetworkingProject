@@ -26,6 +26,7 @@ peer_lock = Lock()                  # Lock to synchronize access to peer_diction
 log_file_path = "chat_history.log"  # Path to the chat history log file
 current_user = None                 # Username of the current user
 last_status = {}                    # Dictionary to store the last known status of peers
+command_prompt_line = 12            # Line number where the command prompt starts
 
 # Diffie-Hellman Parameters
 p = int('''32236799076123020532986389244469020186824276531494491208261987658301048447140395642093591160919531289806076703643002372441192875471874523369977675790673355217361798947704408990676070716614736652983702905633081773067137786283657482830369153577612948994614168479332338571836176901233993518997561596428478449250616828204469490860028038222261904288838006351083402664824298969677390329232619489456731726871715524577728344933741980547579637405293168583844938131124356251831237454721605832955571904971223304322300454690959527709130963810258241341188741687566648849962889823596661474344460344157842930453376073979582896090039''')
@@ -200,9 +201,12 @@ def recv_broadcast():
 
 def print_status(username, status):
     with threading.Lock():
+        # Save the cursor position
+        print("\033[s", end="")
         # Move the cursor to the right side of the console
         print(f"\033[1;50H{username} is now {status}")
-        print("\033[7;0H", end="")  # Move cursor back to the command area
+        # Restore the cursor position and move to the command line
+        print(f"\033[u\033[{command_prompt_line};14H", end="")
 
 def clear_screen():
     # Clear the console screen
@@ -215,6 +219,7 @@ def display_commands():
     print("  Chat - Start a chat session")
     print("  History - Display chat history")
     print("  Exit - Exit the program")
+    print("\nEnter command:", end="")
 
 def chat_receiver(client_socket, addr):
     try:
@@ -411,13 +416,19 @@ def main():
     while True:
         clear_screen()
         display_commands()
-        command = input("\nEnter command: ").strip().lower()
+        command = input().strip().lower()
         if command == 'users':
+            clear_screen()
+            display_commands()
             list_users()
+            input("\nPress Enter to return to the main menu.")
         elif command == 'chat':
             handle_chat()
         elif command == 'history':
+            clear_screen()
+            display_commands()
             display_chat_history()
+            input("\nPress Enter to return to the main menu.")
         elif command == 'exit':
             print("Exiting...")
             break

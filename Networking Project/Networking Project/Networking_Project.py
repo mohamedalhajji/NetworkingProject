@@ -312,20 +312,25 @@ def chat_receiver(client_socket, addr):
             if not iv_ciphertext:
                 break
             if secure:
-                message = decrypt_message(derived_key, iv_ciphertext)
+                message_json = decrypt_message(derived_key, iv_ciphertext)
             else:
-                message = iv_ciphertext.strip()
+                message_json = iv_ciphertext.strip()
+            
+            message_data = json.loads(message_json)
+            message = message_data.get("unencrypted_message", message_data.get("encrypted_message", ""))
+            
             username = [k for k, v in peer_dictionary.items() if v[0] == addr[0]]
             if username:
                 username = username[0]
-                print(f"Received message from {username}: {message}")
-                log_message("Received", "Peer", addr[0], message, secure)
+                print(f"{username}: {message}")
+                log_message("Received", username, addr[0], message, secure)
             else:
-                print(f"Received message from unknown peer {addr[0]}: {message}")
+                print(f"Unknown user: {message}")
     except Exception as e:
         print(f"Error in chat_receiver: {e}")
     finally:
         client_socket.close()
+
 
 def list_users():
     """List all known users and their status."""

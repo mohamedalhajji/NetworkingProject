@@ -26,10 +26,8 @@ log_file_path = "chat_history.log"
 current_user = None
 last_status = {}
 
-# Define DH parameters explicitly
-p = int('''32236799076123020532986389244469020186824276531494491208261987658301048447140395642093591160919531289806076703643002372441192875471874523369977675790673355217361798947704408990676070716614736652983702905633081773067137786283657482830369153577612948994614168479332338571836176901233993518997561596428478449250616828204469490860028038222261904288838006351083402664824298969677390329232619489456731726871715524577728344933741980547579637405293168583844938131124356251831237454721605832955571904971223304322300454690959527709130963810258241341188741687566648849962889823596661474344460344157842930453376073979582896090039''')
-g = 2
-dh_parameters = dh.DHParameterNumbers(p, g).parameters(backend=default_backend())
+# Generate DH parameters once and use them for both key pairs
+parameters = dh.generate_parameters(generator=2, key_size=2048, backend=default_backend())
 
 def generate_dh_keypair(parameters):
     """Generate a Diffie-Hellman keypair."""
@@ -39,34 +37,21 @@ def generate_dh_keypair(parameters):
 
 def compute_shared_secret(private_key, peer_public_key):
     """Compute the shared secret using a private key and a peer's public key."""
-    try:
-        shared_secret = private_key.exchange(peer_public_key)
-        return shared_secret
-    except Exception as e:
-        print(f"Error computing shared secret: {e}")
-        return None
+    return private_key.exchange(peer_public_key)
 
 def serialize_key(public_key):
     """Serialize a public key to a base64-encoded string."""
-    try:
-        serialized_key = public_key.public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo
-        )
-        return base64.b64encode(serialized_key).decode('utf-8')
-    except Exception as e:
-        print(f"Error serializing public key: {e}")
-        return None
+    serialized_key = public_key.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+    return base64.b64encode(serialized_key).decode('utf-8')
 
 def deserialize_key(key_data):
     """Deserialize a base64-encoded public key string."""
-    try:
-        key_bytes = base64.b64decode(key_data.encode('utf-8'))
-        public_key = serialization.load_pem_public_key(key_bytes, backend=default_backend())
-        return public_key
-    except Exception as e:
-        print(f"Error deserializing public key: {e}")
-        return None
+    key_bytes = base64.b64decode(key_data.encode('utf-8'))
+    public_key = serialization.load_pem_public_key(key_bytes, backend=default_backend())
+    return public_key
 
 def encrypt_message(key, plaintext):
     """Encrypt a plaintext message using AES in CBC mode."""
@@ -80,14 +65,21 @@ def encrypt_message(key, plaintext):
 
 def decrypt_message(key, iv_ciphertext):
     """Decrypt an encrypted message using AES in CBC mode."""
-    data = base64.b64decode(iv_ciphertext.encode('utf-8'))
-    iv, ciphertext = data[:16], data[16:]
-    cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
-    decryptor = cipher.decryptor()
-    unpadder = PKCS7(algorithms.AES.block_size).unpadder()
-    padded_plaintext = decryptor.update(ciphertext) + decryptor.finalize()
-    plaintext = unpadder.update(padded_plaintext) + unpadder.finalize()
-    return plaintext.decode()
+    try:
+        data = base64.b64decode(iv_ciphertext.encode('utf-8'))
+        iv, ciphertext = data[:16], data[16:]
+        if len(ciphertext) % 16 != 0:
+            raise ValueError("Ciphertext length is not a multiple of the block size")
+        
+        cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+        decryptor = cipher.decryptor()
+        unpadder = PKCS7(algorithms.AES.block_size).unpadder()
+        padded_plaintext = decryptor.update(ciphertext) + decryptor.finalize()
+        plaintext = unpadder.update(padded_plaintext) + unpadder.finalize()
+        return plaintext.decode()
+    except Exception as e:
+        print(f"Error decrypting message: {e}")
+        return None
 
 def log_message(action, username, ip, message, secure):
     """Log a message to the chat history log file."""
@@ -240,17 +232,29 @@ def chat_initiator(peer_ip):
         client_socket.sendall(b'1' if secure_flag else b'0')
 
         if secure_flag:
-            private_key, public_key = generate_dh_keypair(dh_parameters)
+            # Prompt the user to enter a number
+            user_number = input("Enter a number for key generation: ").strip()
+
+            # Send the user's number to the peer
+            send_message(client_socket, json.dumps({"key": user_number}))
+
+            # Receive the peer's number
+            peer_number_json = receive_message(client_socket)
+            peer_number_data = json.loads(peer_number_json)
+            peer_number = peer_number_data["key"]
+
+            private_key, public_key = generate_dh_keypair(parameters)
             serialized_public_key = serialize_key(public_key)
             send_message(client_socket, serialized_public_key)
 
             peer_public_key_data = receive_message(client_socket)
             peer_public_key = deserialize_key(peer_public_key_data)
 
+            # Compute the shared secret using only the DH mechanism
             shared_secret = compute_shared_secret(private_key, peer_public_key)
             derived_key = HKDF(
-                algorithm=hashes.SHA256(), length=32, salt=None, 
-                info=b'handshake data', backend=default_backend()
+                algorithm=hashes.SHA256(), length=32, salt=None,
+                info=(user_number + peer_number).encode(), backend=default_backend()
             ).derive(shared_secret)
 
             while True:
@@ -282,7 +286,18 @@ def chat_receiver(client_socket, addr):
         print(f"Client has chosen {'secure' if secure else 'unsecure'} chat")
 
         if secure:
-            private_key, public_key = generate_dh_keypair(dh_parameters)
+            # Prompt the peer to enter a number
+            user_number = input("Enter a number for key generation: ").strip()
+
+            # Receive the peer's number
+            peer_number_json = receive_message(client_socket)
+            peer_number_data = json.loads(peer_number_json)
+            peer_number = peer_number_data["key"]
+
+            # Send the user's number to the peer
+            send_message(client_socket, json.dumps({"key": user_number}))
+
+            private_key, public_key = generate_dh_keypair(parameters)
             serialized_public_key = serialize_key(public_key)
             if serialized_public_key is None:
                 print("Failed to serialize public key")
@@ -298,27 +313,21 @@ def chat_receiver(client_socket, addr):
                 print("Failed to deserialize client's public key")
                 return
 
+            # Compute the shared secret using only the DH mechanism
             shared_secret = compute_shared_secret(private_key, client_public_key)
-            if shared_secret is None:
-                print("Failed to compute shared secret. Terminating connection.")
-                return
             derived_key = HKDF(
-                algorithm=hashes.SHA256(), length=32, salt=None, 
-                info=b'handshake data', backend=default_backend()
+                algorithm=hashes.SHA256(), length=32, salt=None,
+                info=(user_number + peer_number).encode(), backend=default_backend()
             ).derive(shared_secret)
-            
+
         while True:
             iv_ciphertext = receive_message(client_socket)
             if not iv_ciphertext:
                 break
             if secure:
-                message_json = decrypt_message(derived_key, iv_ciphertext)
+                message = decrypt_message(derived_key, iv_ciphertext)
             else:
-                message_json = iv_ciphertext.strip()
-            
-            message_data = json.loads(message_json)
-            message = message_data.get("unencrypted_message", message_data.get("encrypted_message", ""))
-            
+                message = iv_ciphertext.strip()
             username = [k for k, v in peer_dictionary.items() if v[0] == addr[0]]
             if username:
                 username = username[0]
@@ -330,7 +339,6 @@ def chat_receiver(client_socket, addr):
         print(f"Error in chat_receiver: {e}")
     finally:
         client_socket.close()
-
 
 def list_users():
     """List all known users and their status."""

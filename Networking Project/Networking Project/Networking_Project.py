@@ -12,7 +12,7 @@ from cryptography.hazmat.backends import default_backend
 from os import urandom
 import base64
 import os
-from pydes import des
+from pyDes import des
 
 # Configuration
 BROADCAST_PORT = 6000

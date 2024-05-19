@@ -7,13 +7,12 @@ from threading import Thread, Lock
 from cryptography.hazmat.primitives.asymmetric import dh
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.primitives.padding import PKCS7
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 from os import urandom
 import base64
 import os
+from pydes import des
 
 # Configuration
 BROADCAST_PORT = 6000
@@ -54,28 +53,17 @@ def deserialize_key(key_data):
     return public_key
 
 def encrypt_message(key, plaintext):
-    """Encrypt a plaintext message using AES in CBC mode."""
-    iv = urandom(16)
-    cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
-    encryptor = cipher.encryptor()
-    padder = PKCS7(algorithms.AES.block_size).padder()
-    padded_plaintext = padder.update(plaintext.encode()) + padder.finalize()
-    ciphertext = encryptor.update(padded_plaintext) + encryptor.finalize()
-    return base64.b64encode(iv + ciphertext).decode('utf-8')
+    """Encrypt a plaintext message using DES."""
+    des_cipher = des()
+    ciphertext = des_cipher.encrypt(key, plaintext)
+    return base64.b64encode(ciphertext).decode('utf-8')
 
-def decrypt_message(key, iv_ciphertext):
-    """Decrypt an encrypted message using AES in CBC mode."""
+def decrypt_message(key, ciphertext):
+    """Decrypt an encrypted message using DES."""
     try:
-        data = base64.b64decode(iv_ciphertext.encode('utf-8'))
-        iv, ciphertext = data[:16], data[16:]
-        if len(ciphertext) % 16 != 0:
-            raise ValueError("Ciphertext length is not a multiple of the block size")
-        
-        cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
-        decryptor = cipher.decryptor()
-        unpadder = PKCS7(algorithms.AES.block_size).unpadder()
-        padded_plaintext = decryptor.update(ciphertext) + decryptor.finalize()
-        plaintext = unpadder.update(padded_plaintext) + unpadder.finalize()
+        ciphertext = base64.b64decode(ciphertext.encode('utf-8'))
+        des_cipher = des()
+        plaintext = des_cipher.decrypt(key, ciphertext)
         return plaintext.decode()
     except Exception as e:
         print(f"Error decrypting message: {e}")
@@ -253,7 +241,7 @@ def chat_initiator(peer_ip):
             # Compute the shared secret using only the DH mechanism
             shared_secret = compute_shared_secret(private_key, peer_public_key)
             derived_key = HKDF(
-                algorithm=hashes.SHA256(), length=32, salt=None,
+                algorithm=hashes.SHA256(), length=8, salt=None,
                 info=(user_number + peer_number).encode(), backend=default_backend()
             ).derive(shared_secret)
 
@@ -316,7 +304,7 @@ def chat_receiver(client_socket, addr):
             # Compute the shared secret using only the DH mechanism
             shared_secret = compute_shared_secret(private_key, client_public_key)
             derived_key = HKDF(
-                algorithm=hashes.SHA256(), length=32, salt=None,
+                algorithm=hashes.SHA256(), length=8, salt=None,
                 info=(user_number + peer_number).encode(), backend=default_backend()
             ).derive(shared_secret)
 

@@ -14,6 +14,7 @@ from pyDes import triple_des
 # Configuration
 BROADCAST_PORT = 6000
 TCP_PORT = 6001
+UDP_PORT = 6002  # Added for UDP communication
 
 # Global variables
 peer_dictionary = {}
@@ -187,19 +188,64 @@ def display_commands():
 
 def start_server():
     """Start the TCP server to listen for incoming chat connections."""
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server_socket.bind(('0.0.0.0', TCP_PORT))
-    server_socket.listen(5)
+    try:
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server_socket.bind(('0.0.0.0', TCP_PORT))
+        server_socket.listen(5)
+        print('The server is ready to receive')
 
-    while True:
-        client_socket, addr = server_socket.accept()
-        client_handler = Thread(target=chat_receiver, args=(client_socket, addr))
-        client_handler.start()
+        while True:
+            client_socket, addr = server_socket.accept()
+            client_handler = Thread(target=chat_receiver, args=(client_socket, addr))
+            client_handler.start()
+    except Exception as e:
+        print(f"Error in start_server: {e}")
+    finally:
+        server_socket.close()
+
+def udp_server():
+    """Start the UDP server to listen for incoming messages."""
+    try:
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server_socket.bind(('', UDP_PORT))
+        print("The UDP server is ready to receive")
+
+        while True:
+            message, clientAddress = server_socket.recvfrom(2048)
+            print('Received {} bytes from {}'.format(len(message), clientAddress))
+            print('Message:', message.decode())
+            modifiedMessage = message.upper()
+            server_socket.sendto(modifiedMessage, clientAddress)
+    except Exception as e:
+        print(f"Error in udp_server: {e}")
+    finally:
+        server_socket.close()
+
+def udp_client(peer_ip):
+    """Send a message to a peer using UDP."""
+    server_address = (peer_ip, UDP_PORT)
+    try:
+        client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        message = input('Input lowercase sentence: ')
+        client_socket.sendto(message.encode("utf-8"), server_address)
+        modifiedMessage, server = client_socket.recvfrom(2048)
+        print('From Server:', modifiedMessage.decode("utf-8"))
+    except Exception as e:
+        print(f"Error in udp_client: {e}")
+    finally:
+        client_socket.close()
 
 def chat_initiator(peer_ip):
     """Initiate a chat session with a peer."""
     secure_flag = input("Secure chat (yes/no)? ").strip().lower() == 'yes'
+    protocol = input("Choose protocol (tcp/udp): ").strip().lower()
+    
+    if protocol == "udp":
+        udp_client(peer_ip)
+        return
+    
     try:
         client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         client_socket.settimeout(10)
@@ -300,9 +346,13 @@ def main():
     listen_thread = Thread(target=peer_discovery, daemon=True)
     listen_thread.start()
 
-    # Start the server
+    # Start the TCP server
     server_thread = Thread(target=start_server, daemon=True)
     server_thread.start()
+
+    # Start the UDP server
+    udp_server_thread = Thread(target=udp_server, daemon=True)
+    udp_server_thread.start()
 
     # Main loop
     while True:

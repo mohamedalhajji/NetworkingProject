@@ -5,11 +5,12 @@ import ipaddress
 from datetime import datetime
 from threading import Thread, Lock
 from cryptography.hazmat.primitives.asymmetric import dh
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.backends import default_backend
 import base64
 import os
-from pyDes import triple_des
+from pyDes import des
 
 # Configuration
 BROADCAST_PORT = 6000
@@ -49,17 +50,17 @@ def deserialize_key(key_data):
     return serialization.load_pem_public_key(key_bytes, backend=default_backend())
 
 def encrypt_message(key, plaintext):
-    """Encrypt a plaintext message using Triple DES."""
-    des_cipher = triple_des(key.ljust(24))
-    ciphertext = des_cipher.encrypt(plaintext, padmode=2)
+    """Encrypt a plaintext message using DES."""
+    des_cipher = des()
+    ciphertext = des_cipher.encrypt(key, plaintext)
     return base64.b64encode(ciphertext).decode('utf-8')
 
 def decrypt_message(key, ciphertext):
-    """Decrypt an encrypted message using Triple DES."""
+    """Decrypt an encrypted message using DES."""
     try:
         ciphertext = base64.b64decode(ciphertext.encode('utf-8'))
-        des_cipher = triple_des(key.ljust(24))
-        return des_cipher.decrypt(ciphertext, padmode=2).decode()
+        des_cipher = des()
+        return des_cipher.decrypt(key, ciphertext).decode()
     except Exception as e:
         print(f"Error decrypting message: {e}")
         return None
@@ -207,12 +208,27 @@ def chat_initiator(peer_ip):
         client_socket.sendall(b'1' if secure_flag else b'0')
 
         if secure_flag:
-            key = input("Enter a key for encryption: ").strip()
+            user_number = input("Enter a number for key generation: ").strip()
+            send_message(client_socket, json.dumps({"key": user_number}))
+            peer_number_json = receive_message(client_socket)
+            peer_number = json.loads(peer_number_json)["key"]
+
+            private_key, public_key = generate_dh_keypair(parameters)
+            serialized_public_key = serialize_key(public_key)
+            send_message(client_socket, serialized_public_key)
+
+            peer_public_key = deserialize_key(receive_message(client_socket))
+            shared_secret = compute_shared_secret(private_key, peer_public_key)
+            derived_key = HKDF(
+                algorithm=hashes.SHA256(), length=8, salt=None,
+                info=(user_number + peer_number).encode(), backend=default_backend()
+            ).derive(shared_secret)
+
             while True:
                 message = input("Enter your message (type 'exit' to end chat): ")
                 if message.lower() == 'exit':
                     break
-                encrypted_message = encrypt_message(key, message)
+                encrypted_message = encrypt_message(derived_key, message)
                 send_message(client_socket, json.dumps({"message": encrypted_message}))
                 log_message("Sent", "You", peer_ip, message, True)
         else:
@@ -234,14 +250,27 @@ def chat_receiver(client_socket, addr):
         print(f"Client has chosen {'secure' if secure else 'unsecure'} chat")
 
         if secure:
-            key = input("Enter a key for decryption: ").strip()
+            user_number = input("Enter a number for key generation: ").strip()
+            peer_number = json.loads(receive_message(client_socket))["key"]
+            send_message(client_socket, json.dumps({"key": user_number}))
+
+            private_key, public_key = generate_dh_keypair(parameters)
+            serialized_public_key = serialize_key(public_key)
+            send_message(client_socket, serialized_public_key)
+
+            client_public_key = deserialize_key(receive_message(client_socket))
+            shared_secret = compute_shared_secret(private_key, client_public_key)
+            derived_key = HKDF(
+                algorithm=hashes.SHA256(), length=8, salt=None,
+                info=(user_number + peer_number).encode(), backend=default_backend()
+            ).derive(shared_secret)
 
         while True:
             message_json = receive_message(client_socket)
             if not message_json:
                 break
             message_data = json.loads(message_json)
-            message = decrypt_message(key, message_data["message"]) if secure else message_data["message"]
+            message = decrypt_message(derived_key, message_data["message"]) if secure else message_data["message"]
             username = next((k for k, v in peer_dictionary.items() if v[0] == addr[0]), "Unknown user")
             print(f"{username}: {message}")
             log_message("Received", username, addr[0], message, secure)
